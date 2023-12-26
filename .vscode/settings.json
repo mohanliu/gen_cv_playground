@@ -1,0 +1,20 @@
+{
+    "[python]": {
+        "editor.defaultFormatter": "ms-python.black-formatter",
+        "editor.formatOnSave": true,
+        "editor.formatOnPaste": false,
+        "editor.codeActionsOnSave": {
+            "source.organizeImports": "explicit"
+        },
+    },
+    "flake8.args": [
+        "--max-line-length=120",
+        "--max-doc-length=120",
+        "--ignore=E402,E722,E501,W503,E203,W605",
+    ],
+    "python.envFile": "${workspaceFolder}/.env",
+    "python.testing.autoTestDiscoverOnSaveEnabled": true,
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true,
+    "notebook.output.textLineLimit": 500,
+}
