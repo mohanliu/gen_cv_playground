@@ -190,6 +190,8 @@ class UNet(nn.Module):
             time_emb_dims=base_channels, time_emb_dims_exp=time_emb_dims_exp
         )
 
+        # == First layer ==
+        # increase the number of channels from 3 (RGB) to base_channels
         self.first = nn.Conv2d(
             in_channels=input_channels,  # 3 for RGB
             out_channels=base_channels,
@@ -200,9 +202,11 @@ class UNet(nn.Module):
 
         num_resolutions = len(base_channels_multiples)  # number of levels
 
-        # Encoder part of the UNet. Dimension reduction.
+        # == Encoder part of the UNet. Dimension reduction. ==
         self.encoder_blocks = nn.ModuleList()
-        curr_channels = [base_channels]  # a stack to keep track of the current channels
+        curr_channels = [
+            base_channels
+        ]  # a stack to keep track of the current channels (for both resnet blocks and downsample blocks)
         in_channels = base_channels  # input channels for next block (will be updated)
 
         # Nested for loops
@@ -214,6 +218,8 @@ class UNet(nn.Module):
             out_channels = base_channels * base_channels_multiples[level]
 
             for _ in range(num_res_blocks):
+                # first residual block will change (mostly increase) the number of channels
+                # the rest will keep the same number of channels
                 block = ResnetBlock(
                     in_channels=in_channels,
                     out_channels=out_channels,
@@ -227,10 +233,13 @@ class UNet(nn.Module):
                 curr_channels.append(in_channels)
 
             if level != (num_resolutions - 1):
+                # downsample spatial resolution if not the last level
                 self.encoder_blocks.append(DownSample(channels=in_channels))
                 curr_channels.append(in_channels)
 
-        # Bottleneck in between
+        # == Bottleneck in between ==
+        # maintain same spatial resolution and number of channels
+        # no need to update curr_channels
         self.bottleneck_blocks = nn.ModuleList(
             (
                 ResnetBlock(
@@ -250,16 +259,19 @@ class UNet(nn.Module):
             )
         )
 
-        # Decoder part of the UNet. Dimension restoration with skip-connections.
+        # == Decoder part of the UNet. Dimension restoration with skip-connections. ==
         self.decoder_blocks = nn.ModuleList()
 
         for level in reversed(range(num_resolutions)):
             out_channels = base_channels * base_channels_multiples[level]
 
             for _ in range(num_res_blocks + 1):
-                encoder_in_channels = curr_channels.pop()
+                # the first block will do the concatenation
+                # the rest will not
+                # additional +1 resnet block for the decoder
+                encoder_in_channels = curr_channels.pop()  # pop no. of channels
                 block = ResnetBlock(
-                    in_channels=encoder_in_channels + in_channels,
+                    in_channels=encoder_in_channels + in_channels,  # concat
                     out_channels=out_channels,
                     dropout_rate=dropout_rate,
                     time_emb_dims=time_emb_dims_exp,
@@ -270,8 +282,11 @@ class UNet(nn.Module):
                 self.decoder_blocks.append(block)
 
             if level != 0:
+                # upsample spatial resolution if not the first level
                 self.decoder_blocks.append(UpSample(in_channels))
 
+        # == Final layer ==
+        # reduce the number of channels to 3 (RGB)
         self.final = nn.Sequential(
             nn.GroupNorm(num_groups=8, num_channels=in_channels),
             nn.SiLU(),
@@ -288,16 +303,17 @@ class UNet(nn.Module):
         time_emb = self.time_embeddings(t)
 
         h = self.first(x)
-        outs = [h]
+        outs = [h]  # a stack to keep track of the outputs of each level
 
         for layer in self.encoder_blocks:
             h = layer(h, time_emb)
-            outs.append(h)
+            outs.append(h)  # save the output of each level
 
         for layer in self.bottleneck_blocks:
             h = layer(h, time_emb)
 
         for layer in self.decoder_blocks:
+            # retrieve and concatenate the output of the corresponding level
             if isinstance(layer, ResnetBlock):
                 out = outs.pop()
                 h = torch.cat([h, out], dim=1)
