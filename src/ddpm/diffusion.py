@@ -1,4 +1,5 @@
 import torch
+from tqdm import tqdm
 
 
 class SimpleDiffusion:
@@ -103,7 +104,7 @@ def forward_diffusion(sd: SimpleDiffusion, x0: torch.Tensor, timesteps: torch.Te
     # note: ``*`` is element-wise multiplication, so it also works for broadcasting
     # all last 3 dimensions are multiplied by the same ``sqrt(alpha_bar)`` scalar (H, W, C)
     # we only have to make sure that the first dimension (batch size) is matched,
-    # either by having the same batch size or by having a batch size of 1 for ``sqrt(alpha_bar)``
+    # either by having the same batch size or by having a batch size of 1 for alpha_bar_sqrt
     mean = get_value_per_time(sd.sqrt_alpha_cumulative, t=timesteps) * x0
 
     # Noise scaled
@@ -113,3 +114,51 @@ def forward_diffusion(sd: SimpleDiffusion, x0: torch.Tensor, timesteps: torch.Te
     sample = mean + std_dev * eps
 
     return sample, eps  # return ... , gt noise --> model predicts this
+
+
+@torch.inference_mode()
+def reverse_diffusion(
+    deep_model,  # Deep NN to predict noise
+    diffusion_model,  # Diffusion Model
+    timesteps=1000,
+    img_shape=(3, 64, 64),
+    num_images=5,
+    device="cpu",
+    record_process=False,
+):
+    x = torch.randn((num_images, *img_shape), device=device)
+    deep_model = deep_model.to(device)
+    deep_model.eval()
+
+    steps = []
+
+    for time_step in tqdm(
+        iterable=reversed(range(1, timesteps)),
+        total=timesteps - 1,
+        dynamic_ncols=False,
+        desc="Sampling :: ",
+        position=0,
+    ):
+        ts = torch.ones(num_images, dtype=torch.long, device=device) * time_step
+        z = torch.randn_like(x) if time_step > 1 else torch.zeros_like(x)
+
+        predicted_noise = deep_model(x, ts)
+
+        beta_t = get_value_per_time(diffusion_model.beta.to(device), ts)
+        one_by_sqrt_alpha_t = get_value_per_time(
+            diffusion_model.one_by_sqrt_alpha.to(device), ts
+        )
+        sqrt_one_minus_alpha_cumulative_t = get_value_per_time(
+            diffusion_model.sqrt_one_minus_alpha_cumulative.to(device), ts
+        )
+
+        x = (
+            one_by_sqrt_alpha_t
+            * (x - (beta_t / sqrt_one_minus_alpha_cumulative_t) * predicted_noise)
+            + torch.sqrt(beta_t) * z
+        )
+
+        if record_process:
+            steps.append(x.detach())
+
+    return x, steps
