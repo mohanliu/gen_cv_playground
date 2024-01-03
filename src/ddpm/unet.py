@@ -46,11 +46,22 @@ class AttentionBlock(nn.Module):
 
     def forward(self, x):
         B, _, H, W = x.shape  # `_` == self.channels
+
+        # group norm
         h = self.group_norm(x)
+
+        # reshape for multi-head attention
+        # the attention applies to the 'channels' dimension and interacts with the spatial dimensions
+        # ie. channel vector -> nlp token and spatial dimensions -> sequence of inputs
         h = h.reshape(B, self.channels, H * W).swapaxes(
             1, 2
         )  # [B, C, H, W] --> [B, C, H * W] --> [B, H*W, C]
+
+        # self-attention
+        # note that multi-head attention module will return both the output and the attention weights
+        # as a tuple but we only need the output here
         h, _ = self.mhsa(h, h, h)  # [B, H*W, C]
+
         h = h.swapaxes(2, 1).view(
             B, self.channels, H, W
         )  # [B, H*W, C] --> [B, C, H*W] --> [B, C, H, W]
@@ -98,6 +109,9 @@ class ResnetBlock(nn.Module):
             padding="same",
         )
 
+        # match input and output channels
+        # if the number of channels is different, we need to do a 1x1 convolution
+        # to match the number of channels
         if self.in_channels != self.out_channels:
             self.match_input = nn.Conv2d(
                 in_channels=self.in_channels,
@@ -119,8 +133,14 @@ class ResnetBlock(nn.Module):
         h = self.conv_1(h)
 
         # group 2
-        # add in timestep embedding (with tensor broadcasting)
-        h += self.dense_1(self.act_fn(t))[:, :, None, None]  # [B, C, 1, 1]
+        # add timestep embedding (with tensor broadcasting over spatial dimensions)
+        # Note that having ``None`` will add new dimensions to the tensor with size 1 (like ``np.newaxis``)
+        # Note that here we can either use ``[:, :, None, None]`` or ``[..., None, None]`` where ``...`` means
+        # all the previous dimensions.
+        # <<old code>>
+        # h += self.dense_1(self.act_fn(t))[:, :, None, None]  # [B, C, 1, 1]
+        # <<new code>>
+        h += self.dense_1(self.act_fn(t))[..., None, None]  # [B, C, 1, 1]
 
         # group 3
         h = self.act_fn(self.normlize_2(h))
@@ -137,6 +157,8 @@ class ResnetBlock(nn.Module):
 class DownSample(nn.Module):
     def __init__(self, channels):
         super().__init__()
+
+        # downsample the spatial resolution by a factor of 2 using strided convolution
         self.downsample = nn.Conv2d(
             in_channels=channels,
             out_channels=channels,
@@ -153,6 +175,7 @@ class UpSample(nn.Module):
     def __init__(self, in_channels):
         super().__init__()
 
+        # use `nn.Upsample` to upsample the spatial resolution
         self.upsample = nn.Sequential(
             nn.Upsample(scale_factor=2, mode="nearest"),
             nn.Conv2d(
@@ -239,7 +262,8 @@ class UNet(nn.Module):
 
         # == Bottleneck in between ==
         # maintain same spatial resolution and number of channels
-        # no need to update curr_channels
+        # no skip connections so no need to update curr_channels
+        # just to add a few deep layers to increase model complexity
         self.bottleneck_blocks = nn.ModuleList(
             (
                 ResnetBlock(
