@@ -1,4 +1,3 @@
-import torch
 import torchvision.datasets as datasets
 import torchvision.transforms as TF
 from torch.utils.data import DataLoader
